@@ -1,12 +1,19 @@
 # support_rag.py
-# Experiment 7: Customer Support RAG pipeline using Ollama.
+# Experiment 7: Customer Support RAG pipeline using Gemini API.
 
+import os
 import re
 import requests
 
-# Ollama configuration
-OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
-MODEL_NAME = "qwen2.5:0.5b"
+# Gemini API configuration.
+# Set GEMINI_API_KEY in Render's Environment settings.
+# Never put the actual API key in this source file.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/"
+    f"models/{GEMINI_MODEL}:generateContent"
+)
 
 # Sample customer-support knowledge base.
 # Replace these documents with your Experiment 5/6 documents if available.
@@ -100,7 +107,7 @@ def retrieve_documents(question, top_k=2):
 
 def ask_rag(question):
     """
-    Retrieve relevant documents and generate an answer using Ollama.
+    Retrieve relevant documents and generate an answer using the Gemini API.
     This function is called by the FastAPI application.
     """
 
@@ -140,29 +147,52 @@ Customer question:
 Answer:
 """
 
-    # Send the prompt to the local Ollama API.
+    # Generate an answer using the Gemini cloud API.
+    if not GEMINI_API_KEY:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not configured. "
+            "Set it as an environment variable."
+        )
+
     response = requests.post(
-        OLLAMA_URL,
+        GEMINI_URL,
+        headers={
+            "x-goog-api-key": GEMINI_API_KEY,
+            "Content-Type": "application/json"
+        },
         json={
-            "model": MODEL_NAME,
-            "messages": [
+            "contents": [
                 {
-                    "role": "user",
-                    "content": prompt
+                    "parts": [
+                        {"text": prompt}
+                    ]
                 }
             ],
-            "stream": False,
-            "options": {
+            "generationConfig": {
                 "temperature": 0
             }
         },
         timeout=120
     )
 
-    # Raise an exception if Ollama returns an HTTP error.
     response.raise_for_status()
+    data = response.json()
 
-    # Extract the generated answer.
-    answer = response.json()["message"]["content"]
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise RuntimeError(
+            "Gemini returned no answer. Check model availability "
+            "and the API response."
+        )
 
-    return answer.strip()
+    parts = candidates[0].get("content", {}).get("parts", [])
+    answer = "".join(
+        part.get("text", "")
+        for part in parts
+        if isinstance(part, dict)
+    ).strip()
+
+    if not answer:
+        raise RuntimeError("Gemini returned an empty answer.")
+
+    return answer
